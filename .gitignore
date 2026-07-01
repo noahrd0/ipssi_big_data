@@ -1,0 +1,11 @@
+logs/
+KboOpenData_*/
+data/
+.venv/
+.ipynb_checkpoints/
+.DS_Store
+*.db
+notaire_cookies.json
+__pycache__/
+*.pyc
+.env

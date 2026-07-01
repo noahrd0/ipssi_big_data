@@ -1,0 +1,28 @@
+# Dépendances Python (local + workers Airflow via docker-compose)
+
+# HTTP & proxy
+requests[socks]>=2.31.0
+PySocks>=1.7.1
+
+# HDFS
+hdfs>=2.7.3
+
+# MongoDB
+pymongo>=4.6.0
+
+# HTML parsing (eJustice)
+beautifulsoup4>=4.12.0
+
+# PDF extraction (couche transformation)
+pdfplumber>=0.10.0
+
+# Data
+pandas>=2.0.0
+
+# Scraping Stapor (cookies F5)
+playwright>=1.40.0
+
+# Visualisation (notebook)
+plotly>=5.18.0
+matplotlib>=3.8.0
+nbformat>=5.10.0
