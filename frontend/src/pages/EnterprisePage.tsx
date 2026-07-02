@@ -50,12 +50,13 @@ export default function EnterprisePage() {
   };
 
   if (!bce) return null;
-  if (error && !data) return <p className="error">{error}</p>;
-  if (!data) return <p className="muted">Chargement...</p>;
+  if (error && !data) return <div className="alert error">{error}</div>;
+  if (!data) return <div className="loading-state">Chargement de la fiche...</div>;
 
   const silver = data.silver;
   const years: YearData[] = data.gold?.years || [];
   const yearData = years.find((y) => y.year === selectedYear);
+  const addr = silver.address as { Street?: string; Zipcode?: string; City?: string } | undefined;
 
   const name =
     (silver.denominations as Array<{ Denomination?: string }>)?.[0]?.Denomination ||
@@ -63,75 +64,103 @@ export default function EnterprisePage() {
     bce;
 
   return (
-    <div className="page">
-      <Link to="/" className="back">← Retour</Link>
-      <h1>{name}</h1>
-      <p className="muted">{bce} — {silver.JuridicalFormLabel as string} — {silver.StatusLabel as string}</p>
+    <div className="detail-page">
+      <Link to="/" className="back-link">← Retour au dashboard</Link>
 
-      {silver.address && (
-        <p>
-          {(silver.address as { Street?: string; Zipcode?: string; City?: string }).Street}{" "}
-          {(silver.address as { Zipcode?: string }).Zipcode}{" "}
-          {(silver.address as { City?: string }).City}
-        </p>
-      )}
+      <div className="detail-hero">
+        <div>
+          <h2>{name}</h2>
+          <p className="hero-meta">
+            <span className="mono">{bce}</span>
+            <span className="dot">·</span>
+            {silver.JuridicalFormLabel as string}
+            <span className="dot">·</span>
+            <span className="status-badge">{silver.StatusLabel as string}</span>
+          </p>
+          {addr && (
+            <p className="hero-address">
+              {addr.Street}, {addr.Zipcode} {addr.City}
+            </p>
+          )}
+        </div>
+        {data.gold?.schema_type && (
+          <span className={`schema schema-${data.gold.schema_type}`}>
+            {data.gold.schema_type}
+          </span>
+        )}
+      </div>
 
-      <section>
-        <h2>Activités NACE</h2>
-        <ul>
-          {(silver.activities as Array<{ NaceCode?: string; NaceLabel?: string }>)?.map((a, i) => (
-            <li key={i}>{a.NaceCode} — {a.NaceLabel}</li>
-          ))}
-        </ul>
-      </section>
-
-      <section>
-        <h2>Dirigeants</h2>
-        {officers.length === 0 ? (
-          <p className="muted">Aucun dirigeant</p>
-        ) : (
-          <ul>
-            {officers.map((o) => (
-              <li key={o.nom}>{o.nom} — {o.qualites.join(", ")}</li>
+      <div className="detail-grid">
+        <div className="card">
+          <h3>Activités NACE</h3>
+          <ul className="info-list">
+            {(silver.activities as Array<{ NaceCode?: string; NaceLabel?: string }>)?.map((a, i) => (
+              <li key={i}>
+                <span className="tag">{a.NaceCode}</span>
+                {a.NaceLabel}
+              </li>
             ))}
           </ul>
-        )}
-      </section>
+        </div>
 
-      <section>
-        <h2>Ratios financiers</h2>
-        {years.length > 0 && (
-          <div className="year-select">
-            <label>Exercice : </label>
+        <div className="card">
+          <h3>Dirigeants</h3>
+          {officers.length === 0 ? (
+            <p className="muted">Aucun dirigeant enregistré</p>
+          ) : (
+            <ul className="info-list">
+              {officers.map((o) => (
+                <li key={o.nom}>
+                  <strong>{o.nom}</strong>
+                  <small>{o.qualites.join(", ")}</small>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div className="card card-wide">
+        <div className="card-header">
+          <h3>Ratios financiers</h3>
+          {years.length > 0 && (
             <select
+              className="year-select-input"
               value={selectedYear ?? ""}
               onChange={(e) => setSelectedYear(Number(e.target.value))}
             >
               {years.map((y) => (
-                <option key={y.year} value={y.year}>{y.year}</option>
+                <option key={y.year} value={y.year}>Exercice {y.year}</option>
               ))}
             </select>
-          </div>
+          )}
+        </div>
+        {yearData ? (
+          <SankeyChart year={yearData} />
+        ) : (
+          <p className="muted">Aucune donnée Gold — lancez build_gold.py</p>
         )}
-        {yearData && <SankeyChart year={yearData} />}
         <RatiosTable years={years} />
-      </section>
+      </div>
 
-      <section>
-        <h2>Statuts notaire</h2>
-        <button onClick={loadStatuts} disabled={streaming}>
-          {streaming ? "Chargement..." : "Charger les statuts"}
-        </button>
+      <div className="card card-wide">
+        <div className="card-header">
+          <h3>Statuts notaire</h3>
+          <button className="btn-primary" onClick={loadStatuts} disabled={streaming}>
+            {streaming ? "Streaming..." : "Charger via SSE"}
+          </button>
+        </div>
         {streaming && <div className="spinner" />}
-        <ul className="statuts">
+        <ul className="statuts-list">
           {statuts.map((s, i) => (
-            <li key={i}>
-              {(s.deed_date as string) || "—"} — {(s.document_id as string)}
-              {s.hdfs_path && <span className="muted"> ({s.hdfs_path as string})</span>}
+            <li key={i} className="statut-item">
+              <span className="statut-date">{(s.deed_date as string) || "—"}</span>
+              <span className="mono">{(s.document_id as string)?.slice(0, 12)}…</span>
+              {s.hdfs_path && <span className="muted">PDF stocké</span>}
             </li>
           ))}
         </ul>
-      </section>
+      </div>
     </div>
   );
 }

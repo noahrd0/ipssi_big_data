@@ -6,6 +6,32 @@ class SearchResult(BaseModel):
     name: str | None = None
     status: str | None = None
     juridical_form_label: str | None = None
+    city: str | None = None
+    nace_label: str | None = None
+
+
+class EnterpriseListItem(BaseModel):
+    enterprise_number: str
+    name: str | None = None
+    status: str | None = None
+    juridical_form_label: str | None = None
+    city: str | None = None
+    nace_label: str | None = None
+    schema_type: str | None = None
+    latest_year: int | None = None
+    ca: float | None = None
+    resultat_net: float | None = None
+    roe_pct: float | None = None
+    marge_nette_pct: float | None = None
+    filings_count: int = 0
+
+
+class DashboardStats(BaseModel):
+    total_hotels: int
+    total_gold: int
+    avg_ca: float | None = None
+    avg_resultat_net: float | None = None
+    schema_breakdown: dict[str, int]
 
 
 class Officer(BaseModel):

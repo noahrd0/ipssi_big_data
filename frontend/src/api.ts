@@ -5,6 +5,32 @@ export interface SearchResult {
   name?: string;
   status?: string;
   juridical_form_label?: string;
+  city?: string;
+  nace_label?: string;
+}
+
+export interface DashboardStats {
+  total_hotels: number;
+  total_gold: number;
+  avg_ca: number | null;
+  avg_resultat_net: number | null;
+  schema_breakdown: Record<string, number>;
+}
+
+export interface EnterpriseListItem {
+  enterprise_number: string;
+  name?: string;
+  status?: string;
+  juridical_form_label?: string;
+  city?: string;
+  nace_label?: string;
+  schema_type?: string;
+  latest_year?: number;
+  ca?: number;
+  resultat_net?: number;
+  roe_pct?: number;
+  marge_nette_pct?: number;
+  filings_count: number;
 }
 
 export interface YearData {
@@ -32,6 +58,28 @@ export interface EnterpriseDetail {
     years: YearData[];
     schema_type?: string;
   };
+}
+
+export async function getDashboardStats(): Promise<DashboardStats> {
+  const res = await fetch(`${API_BASE}/api/dashboard/stats`);
+  if (!res.ok) throw new Error("Stats indisponibles");
+  return res.json();
+}
+
+export async function listEnterprises(opts: {
+  q?: string;
+  page?: number;
+  page_size?: number;
+  has_gold?: boolean;
+}): Promise<EnterpriseListItem[]> {
+  const params = new URLSearchParams();
+  if (opts.q) params.set("q", opts.q);
+  if (opts.page) params.set("page", String(opts.page));
+  if (opts.page_size) params.set("page_size", String(opts.page_size));
+  if (opts.has_gold) params.set("has_gold", "true");
+  const res = await fetch(`${API_BASE}/api/enterprises?${params}`);
+  if (!res.ok) throw new Error("Liste entreprises échouée");
+  return res.json();
 }
 
 export async function searchEnterprises(q: string): Promise<SearchResult[]> {
