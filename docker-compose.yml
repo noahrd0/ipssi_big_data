@@ -215,6 +215,30 @@ services:
     networks:
       - ingestion-net
 
+  # ── API FastAPI (Jour 3) ───────────────────────────────────────────────────
+  api:
+    image: python:3.11-slim
+    container_name: bce-api
+    working_dir: /app
+    command: >
+      bash -c "pip install -q -r requirements.txt &&
+      uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload"
+    ports:
+      - "8000:8000"
+    environment:
+      MONGO_URI: "mongodb://mongo:27017"
+      MONGO_DB: "belgique"
+      HDFS_URL: "http://namenode:9870"
+      HDFS_USER: "root"
+      CORS_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
+    volumes:
+      - .:/app
+    depends_on:
+      - mongo
+      - namenode
+    networks:
+      - ingestion-net
+
 volumes:
   postgres-data:
   namenode-data:

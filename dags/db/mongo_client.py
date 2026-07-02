@@ -12,7 +12,10 @@ Collections :
     enterprises          — entreprises belges (source : KBO CSV, aplati)
     enterprise_finale    — couche Bronze nested (KBO brut agrégé)
     enterprise_silver    — couche Silver (nettoyée / enrichie)
+    hotel_gold           — couche Gold (ratios financiers hôtellerie)
     download_state       — état de chaque fichier téléchargé (State DB)
+    enterprise_officers  — dirigeants kbopub (cache)
+    notaire_statutes     — statuts notaire (cache)
 """
 
 import os
@@ -103,6 +106,21 @@ def init_silver_indexes() -> None:
     )
     db.enterprise_silver.create_index(
         [("activities.NaceCode", ASCENDING)], name="idx_silver_nace"
+    )
+    db.enterprise_silver.create_index(
+        [("denominations.Denomination", ASCENDING)], name="idx_silver_denomination"
+    )
+
+    db.hotel_gold.create_index(
+        [("enterprise_number", ASCENDING)], unique=True, name="idx_gold_number"
+    )
+    db.enterprise_officers.create_index(
+        [("enterprise_number", ASCENDING)], unique=True, name="idx_officers_number"
+    )
+    db.notaire_statutes.create_index(
+        [("enterprise_number", ASCENDING), ("document_id", ASCENDING)],
+        unique=True,
+        name="idx_statutes_unique",
     )
 
     print("✓ Index Silver créés")

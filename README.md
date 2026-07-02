@@ -294,6 +294,55 @@ Le script ouvre une fenêtre Chrome visible pour contourner le challenge F5 de n
 **Tor / rate limiting CBSO**
 Les proxies Tor (ports 9050–9055) sont utilisés automatiquement par le DAG Airflow pour éviter les blocages 429.
 
+## Jour 3 — Gold Layer + API + Frontend
+
+### 1. Construire la couche Gold
+
+Lit les CSV PCMN depuis HDFS (`/data/bronze/{bce}/nbb/{year}/`) et peuple `hotel_gold` :
+
+```bash
+cd dags && source ../.venv/bin/activate
+export MONGO_URI="mongodb://localhost:27017" MONGO_DB="belgique"
+export HDFS_URL="http://localhost:9870" HDFS_USER="root"
+
+# Test sur 10 entreprises
+python build_gold.py --limit 10
+
+# Run complet (4908 hôtels done CBSO)
+python build_gold.py
+```
+
+### 2. Lancer l'API FastAPI
+
+```bash
+# Depuis la racine du projet
+source .venv/bin/activate
+pip install fastapi uvicorn
+uvicorn api.main:app --reload --port 8000
+```
+
+Ou via Docker : `docker compose up api -d` → http://localhost:8000/docs
+
+Endpoints :
+- `GET /api/search?q=hotel`
+- `GET /api/enterprise/{bce}`
+- `GET /api/enterprise/{bce}/dirigeants`
+- `GET /api/enterprise/{bce}/statuts/stream` (SSE)
+
+### 3. Lancer le frontend React
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+→ http://localhost:5173 (proxy API vers :8000)
+
+### 4. DAG recalcul Gold
+
+DAG Airflow `gold_recalculation` — schedule annuel, relance `build_gold.py` sur les entreprises CBSO done.
+
 ## Entreprises de test
 
 | Entreprise | Numéro BCE |
