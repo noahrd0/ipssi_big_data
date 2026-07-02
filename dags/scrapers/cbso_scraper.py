@@ -5,6 +5,7 @@ Récupération des comptes annuels depuis consult.cbso.nbb.be, stockés dans HDF
 """
 
 import logging
+import os
 import time
 from typing import Optional
 
@@ -19,6 +20,14 @@ CBSO_DOC_BASE = "https://consult.cbso.nbb.be/api/external/broker/public/deposits
 CBSO_HOME     = "https://consult.cbso.nbb.be/consult-enterprise"
 HDFS_URL      = "http://namenode:9870"
 HDFS_BASE     = "/data/raw"
+
+
+class CbsoRateLimitError(Exception):
+    """Le NBB a retourné 429 — reprise possible plus tard."""
+
+
+class CbsoFetchError(Exception):
+    """Erreur HTTP lors du listing des dépôts."""
 
 
 def _hdfs_client() -> InsecureClient:
@@ -62,9 +71,15 @@ def fetch_deposit_list(enterprise_number: str) -> list[dict]:
             init_session_url=init_url,
         )
 
+        if resp.status_code == 429:
+            raise CbsoRateLimitError(
+                f"429 Too Many Requests — listing page {page} pour {enterprise_number}"
+            )
+
         if resp.status_code != 200:
-            logger.error(f"[CBSO] API retourne {resp.status_code}")
-            break
+            raise CbsoFetchError(
+                f"HTTP {resp.status_code} — listing page {page} pour {enterprise_number}"
+            )
 
         if not resp.content:
             break
@@ -79,7 +94,7 @@ def fetch_deposit_list(enterprise_number: str) -> list[dict]:
             break
 
         page += 1
-        time.sleep(1.5)  # politesse entre pages
+        time.sleep(float(os.getenv("CBSO_PAGE_SLEEP", "0.3")))
 
     logger.info(f"[CBSO] Total : {len(deposits)} dépôts pour {enterprise_number}")
     return deposits

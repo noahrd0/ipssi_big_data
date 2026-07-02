@@ -4,7 +4,6 @@ transform.py — Bronze (enterprise_finale) → Silver (enterprise_silver).
 
 from __future__ import annotations
 
-import copy
 from datetime import datetime, timezone
 
 from silver.kbo_codes import DEFAULT_KBO_PATH, fmt_code, lookup, nace_category
@@ -123,9 +122,10 @@ def bronze_to_silver(doc: dict, kbo_path: str = DEFAULT_KBO_PATH) -> dict:
     Transforme un document Bronze en document Silver.
     Ne modifie pas le document source.
     """
-    src = copy.deepcopy(doc)
-    if "EnterpriseNumber" not in src and "enterprise_number" in src:
-        src = _flat_to_nested(src)
+    if "EnterpriseNumber" not in doc and "enterprise_number" in doc:
+        src = _flat_to_nested(doc)
+    else:
+        src = doc
 
     num = src.get("EnterpriseNumber") or src.get("enterprise_number")
     jf = fmt_code(src.get("JuridicalForm", ""), 3)

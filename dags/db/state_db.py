@@ -63,7 +63,8 @@ def is_done(
     db: Database | None = None,
 ) -> bool:
     """Retourne True si ce fichier a déjà été téléchargé avec succès."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     doc = db.download_state.find_one(
         {**_key(enterprise_number, source, deposit_id, file_type), "status": "done"},
         {"_id": 1},
@@ -82,7 +83,8 @@ def get_delta(
     Retourne uniquement les deposit_ids qui ne sont PAS encore 'done'.
     C'est le delta à télécharger.
     """
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     done_ids = set(
         doc["deposit_id"]
         for doc in db.download_state.find(
@@ -106,7 +108,8 @@ def get_delta(
 
 def get_stats(enterprise_number: str, db: Database | None = None) -> dict:
     """Résumé de l'état d'ingestion pour une entreprise."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     pipeline = [
         {"$match": {"enterprise_number": enterprise_number}},
         {"$group": {
@@ -134,7 +137,8 @@ def mark_pending(
     db: Database | None = None,
 ) -> None:
     """Enregistre un fichier comme 'pending' (si pas déjà présent)."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     db.download_state.update_one(
         _key(enterprise_number, source, deposit_id, file_type),
         {"$setOnInsert": {
@@ -163,7 +167,8 @@ def mark_done(
     db: Database | None = None,
 ) -> None:
     """Marque un fichier comme téléchargé avec succès."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     update: dict = {
         "status":        "done",
         "hdfs_path":     hdfs_path,
@@ -190,7 +195,8 @@ def mark_error(
     db: Database | None = None,
 ) -> None:
     """Marque un fichier en erreur et incrémente le retry_count."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     db.download_state.update_one(
         _key(enterprise_number, source, deposit_id, file_type),
         {
@@ -212,7 +218,8 @@ def bulk_mark_pending(
     Chaque record doit contenir :
       enterprise_number, source, deposit_id, file_type, year (optionnel)
     """
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     if not records:
         return 0
 
@@ -246,7 +253,8 @@ def mark_in_progress(
     db: Database | None = None,
 ) -> None:
     """Marque une entreprise comme en cours de scraping."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     db.download_state.update_one(
         _key(enterprise_number, source, ENTERPRISE_META_DEPOSIT, "meta"),
         {"$set": {
@@ -276,7 +284,8 @@ def mark_enterprise_done(
     db: Database | None = None,
 ) -> None:
     """Marque le scraping entreprise comme terminé."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     db.download_state.update_one(
         _key(enterprise_number, source, ENTERPRISE_META_DEPOSIT, "meta"),
         {"$set": {
@@ -290,9 +299,51 @@ def mark_enterprise_done(
     log.info(f"[StateDB] enterprise done → {enterprise_number}/{source} ({filings_count} dépôts)")
 
 
+def get_done_enterprises(source: Source, db: Database | None = None) -> set[str]:
+    """Entreprises dont le scraping meta est terminé (status=done)."""
+    if db is None:
+        db = get_db()
+    return {
+        doc["enterprise_number"]
+        for doc in db.download_state.find(
+            {
+                "source":     source,
+                "deposit_id": ENTERPRISE_META_DEPOSIT,
+                "file_type":  "meta",
+                "status":     "done",
+            },
+            {"enterprise_number": 1},
+        )
+    }
+
+
+def get_done_deposit_ids(
+    enterprise_number: str,
+    source: Source,
+    file_type: FileType,
+    db: Database | None = None,
+) -> set[str]:
+    """Tous les deposit_id déjà en done pour une entreprise (1 requête)."""
+    if db is None:
+        db = get_db()
+    return {
+        doc["deposit_id"]
+        for doc in db.download_state.find(
+            {
+                "enterprise_number": enterprise_number,
+                "source":            source,
+                "file_type":         file_type,
+                "status":            "done",
+            },
+            {"deposit_id": 1},
+        )
+    }
+
+
 def get_pending_enterprises(source: Source, db: Database | None = None) -> list[str]:
     """Entreprises en pending ou error (niveau meta) — reprise après 429."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     return sorted({
         doc["enterprise_number"]
         for doc in db.download_state.find(
@@ -300,7 +351,7 @@ def get_pending_enterprises(source: Source, db: Database | None = None) -> list[
                 "source":      source,
                 "deposit_id":  ENTERPRISE_META_DEPOSIT,
                 "file_type":   "meta",
-                "status":      {"$in": ["pending", "error"]},
+                "status":      {"$in": ["pending", "error", "in_progress"]},
             },
             {"enterprise_number": 1},
         )
@@ -309,7 +360,8 @@ def get_pending_enterprises(source: Source, db: Database | None = None) -> list[
 
 def count_done_filings(enterprise_number: str, source: Source, db: Database | None = None) -> int:
     """Nombre de fichiers CBSO marqués done pour une entreprise."""
-    db = db or get_db()
+    if db is None:
+        db = get_db()
     return db.download_state.count_documents({
         "enterprise_number": enterprise_number,
         "source":            source,

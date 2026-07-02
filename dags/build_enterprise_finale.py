@@ -21,7 +21,6 @@ from init_mongodb import (
     BATCH_SIZE,
     CHUNK_SIZE,
     DEFAULT_KBO_PATH,
-    _load_csv_filtered,
     _load_csv_full,
     format_num_vec,
 )
@@ -34,45 +33,87 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
-def _records_from_df(df: pd.DataFrame, entity_col: str = "EntityNumber") -> dict[str, list]:
+def _records_from_df(df: pd.DataFrame, entity_col: str = "EntityNumber", label: str = "") -> dict[str, list]:
     """Groupe les lignes CSV par numéro d'entreprise formaté."""
     if df.empty:
+        log.info(f"  {label or 'CSV'} : vide — skip")
         return {}
     col = "enterprise_number" if "enterprise_number" in df.columns else entity_col
     if col != "enterprise_number":
         df = df.copy()
         df["enterprise_number"] = format_num_vec(df[entity_col])
+    log.info(f"  {label or 'CSV'} : {len(df):,} lignes — groupement par entreprise...")
     grouped: dict[str, list] = {}
     for num, grp in df.groupby("enterprise_number"):
         grouped[num] = grp.drop(columns=["enterprise_number"], errors="ignore").to_dict("records")
+    log.info(f"  {label or 'CSV'} : {len(grouped):,} entreprises")
     return grouped
+
+
+def _load_csv_filtered_verbose(
+    path: Path,
+    entity_col: str,
+    known_nums: set,
+    label: str,
+) -> pd.DataFrame:
+    """Lit un CSV en chunks avec logs de progression."""
+    chunks = []
+    chunk_no = 0
+    rows_kept = 0
+    try:
+        for chunk in pd.read_csv(path, dtype=str, chunksize=CHUNK_SIZE):
+            chunk_no += 1
+            chunk["enterprise_number"] = format_num_vec(chunk[entity_col])
+            filtered = chunk[chunk["enterprise_number"].isin(known_nums)]
+            if not filtered.empty:
+                chunks.append(filtered)
+                rows_kept += len(filtered)
+            if chunk_no % 5 == 0:
+                log.info(f"  {label} : chunk {chunk_no} lu ({rows_kept:,} lignes gardées)")
+    except FileNotFoundError:
+        log.warning(f"  Fichier introuvable : {path.name}")
+        return pd.DataFrame()
+
+    log.info(f"  {label} : terminé — {chunk_no} chunks, {rows_kept:,} lignes")
+    return pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame()
+
+
+def _load_and_group(path: Path, entity_col: str, known_nums: set, label: str) -> dict[str, list]:
+    log.info(f"Chargement {label} ({path.name})...")
+    df = _load_csv_filtered_verbose(path, entity_col, known_nums, label)
+    return _records_from_df(df, entity_col, label=label)
 
 
 def build_enterprise_finale(kbo_path: str = DEFAULT_KBO_PATH, limit: int | None = None) -> int:
     p = Path(kbo_path)
     log.info(f"Construction enterprise_finale depuis {p}")
 
+    log.info("Chargement enterprise.csv...")
     df_ent = _load_csv_full(p / "enterprise.csv")
     if df_ent.empty:
         raise FileNotFoundError(f"enterprise.csv introuvable dans {p}")
 
     df_ent["enterprise_number"] = format_num_vec(df_ent["EnterpriseNumber"])
     known_nums = set(df_ent["enterprise_number"])
+    log.info(f"  enterprise.csv : {len(df_ent):,} entreprises")
     if limit:
         known_nums = set(list(known_nums)[:limit])
         df_ent = df_ent[df_ent["enterprise_number"].isin(known_nums)]
+        log.info(f"  Mode test : limité à {len(known_nums):,} entreprises")
 
-    denoms  = _records_from_df(_load_csv_filtered(p / "denomination.csv", "EntityNumber", known_nums))
-    addrs   = _records_from_df(_load_csv_filtered(p / "address.csv", "EntityNumber", known_nums))
-    acts    = _records_from_df(_load_csv_filtered(p / "activity.csv", "EntityNumber", known_nums))
-    contacts = _records_from_df(_load_csv_filtered(p / "contact.csv", "EntityNumber", known_nums))
+    denoms   = _load_and_group(p / "denomination.csv", "EntityNumber", known_nums, "denomination")
+    addrs    = _load_and_group(p / "address.csv", "EntityNumber", known_nums, "address")
+    acts     = _load_and_group(p / "activity.csv", "EntityNumber", known_nums, "activity")
+    contacts = _load_and_group(p / "contact.csv", "EntityNumber", known_nums, "contact")
 
-    df_est = _load_csv_filtered(p / "establishment.csv", "EnterpriseNumber", known_nums)
+    log.info("Chargement establishment.csv...")
+    df_est = _load_csv_filtered_verbose(p / "establishment.csv", "EnterpriseNumber", known_nums, "establishment")
     if not df_est.empty:
         df_est = df_est.rename(columns={"EstablishmentNumber": "EstablishmentNumber"})
         df_est["EstablishmentNumber"] = format_num_vec(df_est["EstablishmentNumber"])
-    ests = _records_from_df(df_est, "EnterpriseNumber") if not df_est.empty else {}
+    ests = _records_from_df(df_est, "EnterpriseNumber", label="establishment") if not df_est.empty else {}
 
+    log.info(f"Écriture MongoDB ({len(df_ent):,} documents nested)...")
     db = get_db()
     now = datetime.now(timezone.utc)
     ops: list[UpdateOne] = []
