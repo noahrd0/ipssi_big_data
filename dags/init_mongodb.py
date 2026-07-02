@@ -83,6 +83,7 @@ def load_kbo_data(kbo_path: str) -> pd.DataFrame:
         "Status":           "status",
         "JuridicalForm":    "legal_form",
         "StartDate":        "start_date",
+        "TypeOfEnterprise": "type_of_enterprise",
     })
     df_ent["enterprise_number"] = format_num_vec(df_ent["enterprise_number"])
     known_nums = set(df_ent["enterprise_number"])

@@ -43,9 +43,16 @@ HDFS_BRONZE = "/data/bronze"
         "enterprise_number": Param(
             default="",
             type="string",
-            description="Numéro BCE ciblé (vide = toutes les entreprises actives)",
+            description="Numéro BCE ciblé (vide = batch MongoDB)",
         ),
-        "start_year": Param(default=2020, type="integer"),
+        "sector": Param(
+            default="",
+            type="string",
+            description="Secteur ciblé : 'hotel' ou vide (toutes actives)",
+        ),
+        "start_year": Param(default=2020, type="integer", description="Année min PDF (legacy)"),
+        "pdf_start_year": Param(default=2000, type="integer"),
+        "csv_start_year": Param(default=2021, type="integer"),
         "sources": Param(
             default=["cbso", "ejustice"],
             type="array",
@@ -65,22 +72,27 @@ HDFS_BRONZE = "/data/bronze"
 )
 def enterprise_ingestion():
 
-    # ── Task 1 : Résoudre la liste des entreprises 
     @task(task_id="resolve_enterprises")
     def resolve_enterprises(**context) -> list[str]:
-        """
-        Retourne la liste des numéros BCE à traiter.
-        - Si enterprise_number fourni → [enterprise_number]
-        - Sinon → batch depuis MongoDB avec skip pour parallélisme
-        """
         from db.mongo_client import get_db
+        from filters.hotel import get_hotel_enterprises
 
         params = context["params"]
         num    = params.get("enterprise_number", "").strip()
+        sector = params.get("sector", "").strip().lower()
 
         if num:
             log.info(f"Mode ciblé : {num}")
             return [num]
+
+        if sector == "hotel":
+            db = get_db()
+            nums = get_hotel_enterprises(db)
+            batch = params["batch_size"]
+            skip  = params.get("mongo_skip", 0)
+            nums  = nums[skip: skip + batch]
+            log.info(f"Mode hôtellerie : {len(nums)} entreprises")
+            return nums
 
         db    = get_db()
         batch = params["batch_size"]
@@ -97,19 +109,11 @@ def enterprise_ingestion():
         log.info(f"Mode bulk : {len(nums)} entreprises actives depuis MongoDB")
         return nums
 
-    # ── Task 2 : Ingestion CBSO (PDFs + CSVs) 
     @task(task_id="ingest_cbso")
     def ingest_cbso(enterprise_numbers: list[str], **context) -> dict:
-        """
-        Pour chaque entreprise :
-          1. Fetch liste des dépôts CBSO
-          2. Delta detection via State DB
-          3. Téléchargement du delta → HDFS Bronze
-          4. Update State DB (done/error)
-        """
         import time
         from hdfs import InsecureClient
-        from db.state_db import is_done, mark_done, mark_error
+        from db.state_db import is_done, mark_done, mark_error, mark_in_progress, mark_enterprise_done, count_done_filings
         from scrapers.cbso_scraper import (
             fetch_deposit_list, filter_deposits,
             CBSO_DOC_BASE,
@@ -120,12 +124,15 @@ def enterprise_ingestion():
             log.info("[CBSO] Source désactivée — skip")
             return {}
 
-        hdfs       = InsecureClient(HDFS_URL, user=HDFS_USER)
-        start_year = context["params"]["start_year"]
-        results    = {"done": 0, "error": 0, "skipped": 0}
+        hdfs           = InsecureClient(HDFS_URL, user=HDFS_USER)
+        params         = context["params"]
+        pdf_start_year = params.get("pdf_start_year") or params.get("start_year", 2000)
+        csv_start_year = params.get("csv_start_year", 2021)
+        results        = {"done": 0, "error": 0, "skipped": 0}
 
         for num in enterprise_numbers:
             log.info(f"\n[CBSO] {num}")
+            mark_in_progress(num, "cbso")
             try:
                 deposits  = fetch_deposit_list(num)
                 par_annee = filter_deposits(deposits)
@@ -136,29 +143,38 @@ def enterprise_ingestion():
             for annee, depot in sorted(par_annee.items()):
                 an  = int(annee) if annee.isdigit() else 0
                 did = depot["id"]
+                ref = depot.get("reference", did[:8])
 
                 for file_type, min_year, url_fn in [
-                    ("pdf", start_year, lambda d: f"{CBSO_DOC_BASE}/pdf/{d}"),
-                    ("csv", start_year, lambda d: f"{CBSO_DOC_BASE}/consult/csv/{d}"),
+                    ("pdf", pdf_start_year, lambda d: f"{CBSO_DOC_BASE}/pdf/{d}"),
+                    ("csv", csv_start_year, lambda d: f"{CBSO_DOC_BASE}/consult/csv/{d}"),
                 ]:
                     if an < min_year:
+                        continue
+                    if file_type == "csv" and depot.get("migration"):
                         continue
 
                     if is_done(num, "cbso", did, file_type):
                         results["skipped"] += 1
                         continue
 
-                    hdfs_path = f"{HDFS_BRONZE}/{num}/cbso/{file_type}s/{annee}.{file_type}"
+                    ext = "pdf" if file_type == "pdf" else "csv"
+                    if file_type == "csv":
+                        hdfs_path = f"{HDFS_BRONZE}/{num}/nbb/{annee}/{ref}.csv"
+                    else:
+                        hdfs_path = f"{HDFS_BRONZE}/{num}/cbso/{file_type}s/{annee}.{ext}"
                     time.sleep(1)
 
                     try:
-                        resp = get_with_rotation(url_fn(did), timeout=60)
+                        extra = {"Accept": "text/csv,application/octet-stream,*/*"} if file_type == "csv" else {}
+                        resp = get_with_rotation(url_fn(did), timeout=60, extra_headers=extra)
 
                         if resp.status_code == 200 and len(resp.content) > 500:
-                            hdfs.makedirs(f"{HDFS_BRONZE}/{num}/cbso/{file_type}s")
+                            parent = hdfs_path.rsplit("/", 1)[0]
+                            hdfs.makedirs(parent)
                             with hdfs.write(hdfs_path, overwrite=True) as f:
                                 f.write(resp.content)
-                            mark_done(num, "cbso", did, file_type, hdfs_path, len(resp.content))
+                            mark_done(num, "cbso", did, file_type, hdfs_path, len(resp.content), year=an)
                             results["done"] += 1
                         else:
                             mark_error(num, "cbso", did, file_type,
@@ -169,18 +185,14 @@ def enterprise_ingestion():
                         mark_error(num, "cbso", did, file_type, str(exc))
                         results["error"] += 1
 
+            mark_enterprise_done(num, "cbso", count_done_filings(num, "cbso"))
             time.sleep(1)
 
         log.info(f"[CBSO] Résultat : {results}")
         return results
 
-    # ── Task 3 : Ingestion eJustice 
     @task(task_id="ingest_ejustice")
     def ingest_ejustice(enterprise_numbers: list[str], **context) -> dict:
-        """
-        Scrape les publications eJustice et stocke en JSON dans HDFS Bronze.
-        Une publication = 1 entrée dans State DB (deposit_id = numac).
-        """
         import json, time
         from hdfs import InsecureClient
         from db.state_db import is_done, mark_done, mark_error
@@ -223,7 +235,6 @@ def enterprise_ingestion():
         log.info(f"[eJustice] Résultat : {results}")
         return results
 
-    # ── Task 4 : Rapport 
     @task(task_id="ingestion_report")
     def ingestion_report(
         enterprise_numbers: list[str],
@@ -250,7 +261,6 @@ def enterprise_ingestion():
             "ejustice":    ejustice_result,
         }
 
-    # ── Câblage 
     nums = resolve_enterprises()
     cbso = ingest_cbso(nums)
     ej   = ingest_ejustice(nums)

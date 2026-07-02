@@ -9,8 +9,10 @@ Utilisation :
     db.enterprises.find_one({"enterprise_number": "0878.065.378"})
 
 Collections :
-    enterprises     — entreprises belges (source : KBO CSV)
-    download_state  — état de chaque fichier téléchargé (State DB)
+    enterprises          — entreprises belges (source : KBO CSV, aplati)
+    enterprise_finale    — couche Bronze nested (KBO brut agrégé)
+    enterprise_silver    — couche Silver (nettoyée / enrichie)
+    download_state       — état de chaque fichier téléchargé (State DB)
 """
 
 import os
@@ -74,3 +76,33 @@ def init_indexes() -> None:
     )
 
     print("✓ Index MongoDB créés")
+
+
+def init_silver_indexes() -> None:
+    """Index pour enterprise_finale et enterprise_silver."""
+    db = get_db()
+
+    db.enterprise_finale.create_index(
+        [("EnterpriseNumber", ASCENDING)], unique=True, name="idx_finale_number"
+    )
+    db.enterprise_finale.create_index(
+        [("Status", ASCENDING)], name="idx_finale_status"
+    )
+    db.enterprise_finale.create_index(
+        [("activities.NaceCode", ASCENDING)], name="idx_finale_nace"
+    )
+
+    db.enterprise_silver.create_index(
+        [("EnterpriseNumber", ASCENDING)], unique=True, name="idx_silver_number"
+    )
+    db.enterprise_silver.create_index(
+        [("Status", ASCENDING)], name="idx_silver_status"
+    )
+    db.enterprise_silver.create_index(
+        [("JuridicalForm", ASCENDING)], name="idx_silver_juridical"
+    )
+    db.enterprise_silver.create_index(
+        [("activities.NaceCode", ASCENDING)], name="idx_silver_nace"
+    )
+
+    print("✓ Index Silver créés")

@@ -10,7 +10,7 @@ Schéma d'un document download_state :
     "deposit_id":        "uuid-ou-numac-ou-doc-id",
     "year":              2023,              # None pour ejustice/stapor
     "file_type":         "pdf" | "csv" | "json",
-    "status":            "pending" | "done" | "error",
+    "status":            "pending" | "in_progress" | "done" | "error",
     "hdfs_path":         "/data/bronze/...",
     "size_bytes":        123456,
     "retry_count":       0,
@@ -32,8 +32,10 @@ from db.mongo_client import get_db
 log = logging.getLogger(__name__)
 
 Source   = Literal["cbso", "ejustice", "stapor"]
-Status   = Literal["pending", "done", "error"]
-FileType = Literal["pdf", "csv", "json"]
+Status   = Literal["pending", "in_progress", "done", "error"]
+FileType = Literal["pdf", "csv", "json", "meta"]
+
+ENTERPRISE_META_DEPOSIT = "_enterprise"
 
 
 def _now() -> datetime:
@@ -157,19 +159,23 @@ def mark_done(
     file_type: FileType,
     hdfs_path: str,
     size_bytes: int,
+    year: int | None = None,
     db: Database | None = None,
 ) -> None:
     """Marque un fichier comme téléchargé avec succès."""
     db = db or get_db()
+    update: dict = {
+        "status":        "done",
+        "hdfs_path":     hdfs_path,
+        "size_bytes":    size_bytes,
+        "error_message": None,
+        "downloaded_at": _now(),
+    }
+    if year is not None:
+        update["year"] = year
     db.download_state.update_one(
         _key(enterprise_number, source, deposit_id, file_type),
-        {"$set": {
-            "status":        "done",
-            "hdfs_path":     hdfs_path,
-            "size_bytes":    size_bytes,
-            "error_message": None,
-            "downloaded_at": _now(),
-        }},
+        {"$set": update},
         upsert=True,
     )
     log.info(f"[StateDB] done → {enterprise_number}/{source}/{file_type} : {hdfs_path}")
@@ -232,3 +238,82 @@ def bulk_mark_pending(
     result = db.download_state.bulk_write(ops, ordered=False)
     log.info(f"[StateDB] bulk_pending : {result.upserted_count} nouveaux, {result.matched_count} existants")
     return result.upserted_count
+
+
+def mark_in_progress(
+    enterprise_number: str,
+    source: Source,
+    db: Database | None = None,
+) -> None:
+    """Marque une entreprise comme en cours de scraping."""
+    db = db or get_db()
+    db.download_state.update_one(
+        _key(enterprise_number, source, ENTERPRISE_META_DEPOSIT, "meta"),
+        {"$set": {
+            "status":     "in_progress",
+            "updated_at": _now(),
+        },
+         "$setOnInsert": {
+            **_key(enterprise_number, source, ENTERPRISE_META_DEPOSIT, "meta"),
+            "year":          None,
+            "hdfs_path":     None,
+            "size_bytes":    None,
+            "retry_count":   0,
+            "error_message": None,
+            "created_at":    _now(),
+            "downloaded_at": None,
+            "filings_count": 0,
+        }},
+        upsert=True,
+    )
+    log.info(f"[StateDB] in_progress → {enterprise_number}/{source}")
+
+
+def mark_enterprise_done(
+    enterprise_number: str,
+    source: Source,
+    filings_count: int,
+    db: Database | None = None,
+) -> None:
+    """Marque le scraping entreprise comme terminé."""
+    db = db or get_db()
+    db.download_state.update_one(
+        _key(enterprise_number, source, ENTERPRISE_META_DEPOSIT, "meta"),
+        {"$set": {
+            "status":        "done",
+            "filings_count": filings_count,
+            "downloaded_at": _now(),
+            "error_message": None,
+        }},
+        upsert=True,
+    )
+    log.info(f"[StateDB] enterprise done → {enterprise_number}/{source} ({filings_count} dépôts)")
+
+
+def get_pending_enterprises(source: Source, db: Database | None = None) -> list[str]:
+    """Entreprises en pending ou error (niveau meta) — reprise après 429."""
+    db = db or get_db()
+    return sorted({
+        doc["enterprise_number"]
+        for doc in db.download_state.find(
+            {
+                "source":      source,
+                "deposit_id":  ENTERPRISE_META_DEPOSIT,
+                "file_type":   "meta",
+                "status":      {"$in": ["pending", "error"]},
+            },
+            {"enterprise_number": 1},
+        )
+    })
+
+
+def count_done_filings(enterprise_number: str, source: Source, db: Database | None = None) -> int:
+    """Nombre de fichiers CBSO marqués done pour une entreprise."""
+    db = db or get_db()
+    return db.download_state.count_documents({
+        "enterprise_number": enterprise_number,
+        "source":            source,
+        "file_type":         "csv",
+        "status":            "done",
+        "deposit_id":        {"$ne": ENTERPRISE_META_DEPOSIT},
+    })

@@ -190,19 +190,83 @@ Dans Docker, Airflow utilise `http://namenode:9870` et l'utilisateur `airflow` (
 
 ```
 big_data_entreprise/
-├── docker-compose.yml      # Infrastructure (Airflow, HDFS, MongoDB, Tor)
+├── docker-compose.yml           # Infrastructure (Airflow, HDFS, MongoDB, Tor)
 ├── dags/
-│   ├── ingestion_dag.py    # DAG Airflow principal
-│   ├── init_mongodb.py     # Chargement KBO → MongoDB
-│   ├── db/                 # Clients MongoDB & State DB
-│   └── scrapers/           # CBSO, eJustice, Tor
-├── hadoop-config/          # Configuration HDFS
-├── BCE.ipynb               # Notebook d'analyse
-├── consult.py              # Script CBSO standalone
-├── strapor.py              # Stapor → fichiers locaux
-├── stapor_scraper.py       # Stapor → HDFS
-├── data/kbo/               # CSV KBO (à fournir)
+│   ├── ingestion_dag.py         # DAG Airflow principal
+│   ├── init_mongodb.py          # Chargement KBO → MongoDB (enterprises)
+│   ├── build_enterprise_finale.py  # Bronze nested → enterprise_finale
+│   ├── build_silver.py          # Silver → enterprise_silver
+│   ├── seed_hotel_state.py      # StateDB pending hôtellerie
+│   ├── scrape_hotel_cbso.py     # Scraping CBSO hôtellerie 2021+
+│   ├── silver/                  # Transformations Silver
+│   ├── filters/                 # Filtres sectoriels (hôtellerie)
+│   ├── db/                      # Clients MongoDB & State DB
+│   └── scrapers/                # CBSO, eJustice, Tor
+├── hadoop-config/               # Configuration HDFS
+├── BCE.ipynb                    # Notebook d'analyse
+├── consult.py                   # Script CBSO standalone
+├── strapor.py                   # Stapor → fichiers locaux
+├── stapor_scraper.py            # Stapor → HDFS
+├── data/kbo/                    # CSV KBO (à fournir)
 └── requirements.txt
+```
+
+## Jour 2 — Silver + Hôtellerie
+
+### 1. Bronze nested (si `enterprise_finale` absente)
+
+```bash
+cd dags
+export MONGO_URI="mongodb://localhost:27017"
+export MONGO_DB="belgique"
+python build_enterprise_finale.py --kbo-path "../data/kbo"
+# Test : python build_enterprise_finale.py --limit 1000
+```
+
+### 2. Couche Silver
+
+```bash
+python build_silver.py
+# Source explicite : python build_silver.py --source enterprise_finale
+```
+
+Vérifier dans Mongo Express : collection `enterprise_silver` (dates ISO, labels, 1 adresse REGO).
+
+### 3. Filtre hôtellerie + StateDB
+
+```bash
+python seed_hotel_state.py
+```
+
+### 4. Scraping CBSO hôtellerie (CSV 2021–2025)
+
+```bash
+export HDFS_URL="http://localhost:9870"
+export HDFS_USER="root"
+
+# Test sur 5 entreprises
+python scrape_hotel_cbso.py --limit 5
+
+# Run complet
+python scrape_hotel_cbso.py
+
+# Reprise après 429
+python scrape_hotel_cbso.py --resume
+```
+
+Fichiers HDFS : `/data/bronze/{bce}/nbb/{year}/{reference}.csv`
+
+### 5. Via Airflow (alternative)
+
+Trigger DAG `enterprise_ingestion` avec :
+
+```json
+{
+  "sector": "hotel",
+  "sources": ["cbso"],
+  "csv_start_year": 2021,
+  "batch_size": 50
+}
 ```
 
 ## Dépannage
